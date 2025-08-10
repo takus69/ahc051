@@ -168,7 +168,7 @@ impl Node {
     }
 
     fn has_sorter(&self) -> bool {
-        self.is_sorter() && self.machine_id >= 0 && self.machine_id < self.input.m as isize
+        self.is_sorter() && self.machine_id >= 0 && self.machine_id < self.input.k as isize
     }
 
     fn out_prob(&self) -> Vec<f64> {
@@ -194,6 +194,7 @@ struct Solver {
     input: Rc<Input>,
     root: NodeRef,
     nodes: Vec<NodeRef>,
+    used: Vec<usize>,
     edges: Vec<(usize, usize)>,
 }
 
@@ -201,9 +202,11 @@ impl Solver {
     fn new(input: &Rc<Input>) -> Self {
         // ノードは処理装置(n個) + 分別器(m個) + 搬入口(1個)
         let mut nodes = Vec::with_capacity(input.n+input.m+1);
+        let mut used: Vec<usize> = Vec::new();
         // 処理装置
         for i in 0..input.n {
             nodes.push(Node::create_processor(i, i as isize, input));
+            used.push(i);
         }
         // 分別器
         for j in 0..input.m {
@@ -211,9 +214,10 @@ impl Solver {
         }
         // 搬入口
         let root = Node::create_root(input);
+        used.push(root.borrow().id);
         nodes.push(Rc::clone(&root));
         let edges: Vec<(usize, usize)> = Vec::new();
-        Solver { input: Rc::clone(input), root, nodes, edges }
+        Solver { input: Rc::clone(input), root, nodes, used, edges }
     }
 
     fn solve(&mut self) {
@@ -229,35 +233,37 @@ impl Solver {
         // self.connect(n, Some(0), Some(1));
     }
 
-    fn greedy_connect(&mut self, id: usize) {
+    fn greedy_connect(&mut self, id: usize, child_i: usize) {
         let node = Rc::clone(&self.nodes[id]);
-        let (child_cnt, in_prob, out_prob) = {
+        let (in_prob, out_prob) = {
             let borrow_node = node.borrow();
             assert!(borrow_node.is_root() || borrow_node.is_sorter(), "Node must be root or sorter.");
-            let child_cnt = borrow_node.child_cnt();
-            let in_prob = borrow_node.in_prob.clone();
-            let out_prob = borrow_node.out_prob.clone();
-            (child_cnt, in_prob, out_prob)
+            let in_probs = borrow_node.in_prob.clone();
+            let mut in_prob = vec![0.0; self.input.k];
+            for p in in_probs.iter() {
+                in_prob = add(&in_prob, p);
+            }
+            let out_probs = borrow_node.out_prob.clone();
+            let out_prob = out_probs[child_i];
+            (in_prob, out_prob)
         };
 
-        for i in 0..child_cnt {
-            let mut opt_eval = f64::MIN;
-            let mut opt_child = Rc::clone(&self.nodes[0]);
-            for (child_id, child) in self.nodes.iter().enumerate() {
-                if child_id == id { continue; }
-                if !self.connectable(&node, child) { continue; }
-                let borrow_child = child.borrow();
-                let child_out_prob = borrow_child.out_prob();
+        let mut opt_eval = f64::MIN;
+        let mut opt_child = Rc::clone(&self.nodes[0]);
+        for (child_id, child) in self.nodes.iter().enumerate() {
+            if child_id == id { continue; }
+            if !self.connectable(&node, child) { continue; }
+            let borrow_child = child.borrow();
+            let child_out_prob = borrow_child.out_prob();
 
-                let diff_prob = subtract(&out_prob[i], &child_out_prob);
-                let eval = dot(&in_prob[i], &diff_prob);
-                if opt_eval > eval {
-                    opt_eval = eval;
-                    opt_child = Rc::clone(child);
-                }
+            let diff_prob = subtract(&out_prob, &child_out_prob);
+            let eval = dot(&in_prob[child_i], &diff_prob);
+            if opt_eval > eval {
+                opt_eval = eval;
+                opt_child = Rc::clone(child);
             }
-            self.connect(&node, &opt_child, i);
         }
+        self.connect(&node, &opt_child, child_i);
     }
 
     fn connectable(&self, node: &NodeRef, child: &NodeRef) -> bool {
