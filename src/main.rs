@@ -302,13 +302,16 @@ impl Solver {
         self.update_nodes();
     }
 
-    fn solve(&mut self) {
+    fn solve(&mut self) -> Self {
         let root_id = self.root.borrow().id;
         self.connect(root_id, 0, 0);
         self.update_nodes();
         let mut trial_cnt = 0;
+        let mut trial2_cnt = 0;
         let mut update_cnt = 0;
-        for i in 0..1000 {
+        let mut opt_score = 1_000_000_000;
+        let mut opt_solver = self.clone();
+        while self.on_time() {
             trial_cnt += 1;
             let (node_id, child_id, child_i) = self.random_edge();
             let (next_node_id, next_child_id, next_child_i, ki) = self.split_edges(node_id, child_id, child_i);
@@ -322,12 +325,26 @@ impl Solver {
             self.connect(next_node_id, child_id, (next_child_i+1)%2);
             self.connect(next_node_id, next_child_id, next_child_i);
             self.update_nodes();
-            update_cnt += 1;
+            let score = self.score();
+            trial2_cnt += 1;
+            if score < opt_score {
+                eprintln!("score: {} => {}", opt_score, score);
+                opt_score = score;
+                opt_solver = self.clone();
+                update_cnt += 1;
+            } else {
+                *self = opt_solver.clone();
+            }
         }
         eprintln!("trial_cnt: {}, update_cnt: {}, update_rate: {}%", trial_cnt, update_cnt, ((10000*update_cnt) as f64 / trial_cnt as f64).round()/100.0);
+        eprintln!("trial2_cnt: {}, update_cnt: {}, update_rate: {}%", trial2_cnt, update_cnt, ((10000*update_cnt) as f64 / trial2_cnt as f64).round()/100.0);
+
+        // opt_solver
+        self.clone()
     }
 
     fn split_edges(&mut self, node_id: usize, child_id: usize, child_i: usize) -> (usize, usize, usize, isize) {
+        let max_cnt = 10;
         let pos1 = midpoint(self.input.pos[node_id], self.input.pos[child_id]);
         let mut used_nodes: BinaryHeap<(Reverse<usize>, usize)> = BinaryHeap::new();
         let mut unused_nodes: BinaryHeap<(Reverse<usize>, usize)> = BinaryHeap::new();
@@ -344,16 +361,27 @@ impl Solver {
         let node_p = self.nodes[node_id].borrow().p(child_i);
         let child_out_prob = self.nodes[child_id].borrow().out_prob();
         let mut opt_eval = dot(&node_p, &child_out_prob);
+        // let mut opt_eval = 0.0;
+        eprintln!("opt_eval: {}", opt_eval);
         let mut opt_next_id = node_id;
         let mut opt_next_child_id = child_id;
         let mut opt_next_child_i = child_i;
         let mut opt_ki = -1;
+        let mut unused_cnt = 0;
+        let mut used_cnt = 0;
+        let mut eval_cnt = 0;
         while let Some((_, next_id)) = unused_nodes.pop() {
+            unused_cnt += 1;
+            // if unused_cnt > max_cnt { break; }
             if !self.connectable(next_id, node_id) { continue; }
             if !self.connectable(next_id, child_id) { continue; }
             while let Some((_, next_child_id)) = used_nodes.pop() {
+                used_cnt += 1;
+                // if used_cnt > max_cnt { break; }
                 if !self.connectable(next_id, next_child_id) { continue; }
                 if self.is_connect(next_child_id, node_id) { continue; }
+                eval_cnt += 1;
+                // if eval_cnt > max_cnt { break; }
 
                 // 接続できるノードが見つかったので、最適な分別器を探索
                 let next_child_out_prob = self.nodes[next_child_id].borrow().out_prob();
@@ -391,6 +419,7 @@ impl Solver {
             }
         }
 
+        eprintln!("unused: {}, used: {}, eval: {}, ope_eval: {}", unused_cnt, used_cnt, eval_cnt, opt_eval);
         (opt_next_id, opt_next_child_id, opt_next_child_i, opt_ki)
     }
 
@@ -533,27 +562,11 @@ impl Solver {
 }
 
 fn main() {
-    let timer = Instant::now();
     let input = Input::parse_input();
     let input = Rc::new(input);
     // Solver 初期化・実行
-    let mut solver = Solver::new(&input, 0, 200);
-    solver.solve2();
-    let mut opt_score = solver.score();
-    let mut opt_solver = solver.clone();
-    eprintln!("opt_score: {}", opt_score);
-
-    for i in 0..10 {
-        if timer.elapsed().as_millis() > 1600 { break; }
-        let mut solver = Solver::new(&input, i, 200);
-        solver.solve();
-        let score = solver.score();
-        if opt_score > score {
-            eprintln!("opt_score: {} => {}", opt_score, score);
-            opt_score = score;
-            opt_solver = solver.clone();
-        }
-    }
-    opt_solver.ans();
-    opt_solver.result();
+    let mut solver = Solver::new(&input, 0, 1800);
+    solver = solver.solve();
+    solver.ans();
+    solver.result();
 }
